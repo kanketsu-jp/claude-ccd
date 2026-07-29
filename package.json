@@ -1,0 +1,53 @@
+{
+  "name": "claude-ccd",
+  "version": "0.1.0",
+  "description": "Switch between multiple Claude Code accounts, and auto-switch when you hit a rate limit.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "account",
+    "switch",
+    "rate-limit",
+    "cli"
+  ],
+  "license": "MIT",
+  "author": "kanketsu-jp",
+  "homepage": "https://github.com/kanketsu-jp/claude-ccd#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kanketsu-jp/claude-ccd.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kanketsu-jp/claude-ccd/issues"
+  },
+  "type": "module",
+  "bin": {
+    "ccd": "bin/ccd.js"
+  },
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "shell",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18.17"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "node --check bin/ccd.js"
+  },
+  "dependencies": {},
+  "publishConfig": {
+    "access": "public"
+  }
+}

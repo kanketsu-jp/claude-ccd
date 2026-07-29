@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: ['18', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Check syntax
+        run: for f in $(find bin src test -name '*.js'); do node --check "$f"; done
+      - name: Test
+        run: npm test
+      - name: Smoke test CLI
+        run: |
+          node bin/ccd.js --version
+          node bin/ccd.js --help
+          node bin/ccd.js list
+          node bin/ccd.js shell-init zsh > /dev/null
+      - name: No absolute home paths committed
+        run: |
+          pattern="$(printf '/%s/\\|/home/[a-z]' Users)"
+          if grep -rn "$pattern" bin src shell test 2>/dev/null; then
+            echo "::error::hardcoded home path found"; exit 1
+          fi
