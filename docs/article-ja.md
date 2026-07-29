@@ -490,41 +490,29 @@ ccd hook install --mode notify
 
 **Q1**: `CLAUDE_CONFIG_DIR=$HOME/.claude claude` と `claude` は、同じディレクトリを使うのに結果が違います。なぜ?
 
-<details>
-<summary>答えを見る</summary>
-
+:::details 答えを見る
 macOS の Keychain サービス名が、環境変数の**有無**で分岐するためです。未設定なら `Claude Code-credentials`、設定されていれば `Claude Code-credentials-<sha256 の先頭 8 桁>` になります。既定パスを明示すると後者の分岐に入り、まだ存在しない項目を探すので未ログイン扱いになります。
-
-</details>
+:::
 
 **Q2**: 設定ディレクトリを変えたら、Skills や MCP サーバーの設定も引き継がれますか?
 
-<details>
-<summary>答えを見る</summary>
-
+:::details 答えを見る
 引き継がれません。設定ディレクトリはアカウントごとに完全に独立しています。Skills や rules は symlink で共有し、MCP サーバーの定義は `.claude.json` の `mcpServers` をマージする必要があります。
-
-</details>
+:::
 
 **Q3**: `StopFailure` が `error: "rate_limit"` で発火しました。そのアカウントはもう使えないと判断してよいですか?
 
-<details>
-<summary>答えを見る</summary>
-
+:::details 答えを見る
 判断できません。上限に当たってもモデルのフォールバックで応答が続くことがあり、その場合もフックは発火します。`last_assistant_message` を見て、ユーザーに見せない定型文字列（`No response requested.`）が入っていれば、会話は続いているので切り替えるべきではありません。
 
 また上限には 5 時間枠・7 日枠・Opus の週次枠があり、どれに当たったかはフックからは直接わかりません。クールダウンを分単位で固定すると、週次枠のときに短すぎます。
-
-</details>
+:::
 
 **Q4**: 動いているセッションの途中でアカウントを切り替えられますか?
 
-<details>
-<summary>答えを見る</summary>
-
+:::details 答えを見る
 できません。環境変数はプロセス起動時に読まれるためです。切り替えとは実質「別アカウントで新しいプロセスを起こす」ことで、会話を続けたい場合は `--resume <session_id>` を使い、対象のセッションファイルを切り替え先の設定ディレクトリから参照できるようにします。
-
-</details>
+:::
 
 :::message
 **最重要ポイント**
