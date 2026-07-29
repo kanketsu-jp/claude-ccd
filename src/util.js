@@ -104,6 +104,30 @@ export function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
+// config.argAliases に従って短縮フラグを実引数へ展開する。
+// 表に無い引数はそのまま通す。`--` 以降は展開しない (claude へ素通しする領域のため)。
+export function expandArgAliases(args = [], config = {}) {
+  const aliases = config.argAliases || {};
+  const out = [];
+  let passthrough = false;
+  for (const arg of args) {
+    if (passthrough) {
+      out.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      passthrough = true;
+      out.push(arg);
+      continue;
+    }
+    const replacement = Object.prototype.hasOwnProperty.call(aliases, arg) ? aliases[arg] : null;
+    if (replacement == null) out.push(arg);
+    else if (Array.isArray(replacement)) out.push(...replacement.map(String));
+    else out.push(String(replacement));
+  }
+  return out;
+}
+
 export function projectKey(cwd) {
   return String(cwd || process.cwd()).replaceAll('/', '-').replaceAll('.', '-');
 }

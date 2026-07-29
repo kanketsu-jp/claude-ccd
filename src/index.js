@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { currentDir, nameForDir } from './accounts.js';
 import { loadConfig } from './config.js';
-import { commandExists } from './util.js';
+import { commandExists, expandArgAliases } from './util.js';
 import * as listCmd from './commands/list.js';
 import * as useCmd from './commands/use.js';
 import * as addCmd from './commands/add.js';
@@ -70,7 +70,7 @@ function launchClaude(args) {
     process.stderr.write(`Claude binary not found: ${bin}\n`);
     return 1;
   }
-  const result = spawnSync(bin, [...(config.launchArgs || []), ...args], { stdio: 'inherit' });
+  const result = spawnSync(bin, [...(config.launchArgs || []), ...expandArgAliases(args, config)], { stdio: 'inherit' });
   return typeof result.status === 'number' ? result.status : 1;
 }
 

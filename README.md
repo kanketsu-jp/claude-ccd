@@ -117,6 +117,24 @@ ccd config set autoSwitch.mode auto
 ccd config set autoSwitch.cooldownMinutes 90
 ```
 
+## Launch options
+
+`ccd` with no subcommand launches Claude Code, so it can stand in for the
+`claude` command itself. Two config keys shape that:
+
+```bash
+# always pass these flags
+ccd config set launchArgs '["--dangerously-skip-permissions"]'
+
+# define your own shorthands
+ccd config set argAliases '{"-y": ["--dangerously-skip-permissions"]}'
+```
+
+With that, `ccd -y --resume abc` runs
+`claude --dangerously-skip-permissions --resume abc`. Anything after a bare
+`--` is passed through untouched, which is also how you send a prompt that
+would otherwise be read as a subcommand: `ccd -- list the open PRs`.
+
 The hook always exits 0. A broken auto-switch must never take your session
 down with it.
 

@@ -6,6 +6,8 @@ import { deepMerge, readJson, writeJsonAtomic } from './util.js';
 export const defaultConfig = {
   claudeBin: null,
   launchArgs: [],
+  // 短縮フラグ -> 実引数の展開表。例: {"-y": ["--dangerously-skip-permissions"]}
+  argAliases: {},
   extraDirs: [],
   autoSwitch: {
     mode: 'notify',
