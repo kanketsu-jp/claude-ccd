@@ -19,6 +19,7 @@ export function loadState() {
     rateLimited: stored.rateLimited || {},
     switches: Array.isArray(stored.switches) ? stored.switches : [],
     lastSwitchBySession: stored.lastSwitchBySession || {},
+    lastEvent: stored.lastEvent || null,
   };
 }
 
@@ -29,6 +30,14 @@ export function saveState(state) {
 export function recordRateLimit(name) {
   const state = loadState();
   state.rateLimited[name] = Date.now();
+  saveState(state);
+}
+
+// StopFailure は stdout を捨てるため、フックが何をしたかは状態に残さないと後から追えない。
+// `ccd hook status` がこれを表示する。
+export function recordEvent(kind, message) {
+  const state = loadState();
+  state.lastEvent = { at: Date.now(), kind: String(kind), message: String(message) };
   saveState(state);
 }
 
@@ -46,6 +55,7 @@ export function pruneState(state) {
     rateLimited: { ...(state.rateLimited || {}) },
     switches: Array.isArray(state.switches) ? state.switches.slice(-50) : [],
     lastSwitchBySession: { ...(state.lastSwitchBySession || {}) },
+    lastEvent: state.lastEvent || null,
   };
   for (const [sessionId, at] of Object.entries(out.lastSwitchBySession)) {
     if (now - at > 24 * 60 * 60 * 1000) delete out.lastSwitchBySession[sessionId];

@@ -85,9 +85,8 @@ ccd hook install --mode auto     # actually switch and continue
 ```
 
 This registers a `StopFailure` hook with `matcher: "rate_limit"` in the
-account's `settings.json`. Claude Code normalizes rate-limit failures to
-`error: "rate_limit"`, so detection does not depend on matching English error
-text.
+account's `settings.json`. Claude Code classifies stop failures by error type,
+so detection does not depend on matching English error text.
 
 When it fires, `ccd`:
 
@@ -97,6 +96,20 @@ When it fires, `ccd`:
 4. sends a continue message.
 
 In `notify` mode it stops after step 2 and just tells you the command to run.
+
+Claude Code **ignores stdout and the exit code for `StopFailure` hooks**, so
+results reach you two other ways: a desktop notification, and the record kept
+in `ccd hook status`.
+
+```console
+$ ccd hook status
+installed (/home/you/.claude/settings.json)
+last event: 2026-07-29T05:29:16.677Z [suggested] Rate limit detected. Suggested account: work. Command: CLAUDE_CONFIG_DIR='/home/you/.claude-work' 'claude'
+```
+
+Only `rate_limit` triggers a switch. Other stop failures Claude Code reports —
+`overloaded`, `server_error` and the rest — are capacity or request problems
+that another account would hit just the same, so `ccd` leaves them alone.
 
 ### Safety limits
 
@@ -150,6 +163,11 @@ session instead of failing.
 
 Claude Code reads `CLAUDE_CONFIG_DIR` to decide where settings, history and
 credentials live. `ccd` is a thin, careful wrapper around that variable.
+
+`CLAUDE_CONFIG_DIR` is not part of Claude Code's documented configuration
+surface, so its behaviour is established by observation and could change in a
+future release. `ccd doctor` is the quickest way to tell whether it still holds
+on your machine.
 
 The careful part is credential storage. On macOS the keychain service name
 depends on the config dir:

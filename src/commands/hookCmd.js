@@ -3,6 +3,7 @@ import path from 'node:path';
 import { defaultDir, resolveAccount } from '../accounts.js';
 import { loadConfig, saveConfig } from '../config.js';
 import { runRateLimitHook } from '../hook.js';
+import { loadState } from '../state.js';
 import { readJson, writeJsonAtomic } from '../util.js';
 
 function readStdin() {
@@ -91,7 +92,14 @@ export async function run(args = []) {
     const settings = readJson(file) || {};
     const installed = Array.isArray(settings.hooks?.StopFailure)
       && settings.hooks.StopFailure.some((entry) => (entry.hooks || []).some((hook) => hook.command === 'ccd hook rate-limit'));
-    process.stdout.write(`${installed ? 'installed' : 'not installed'}\n`);
+    process.stdout.write(`${installed ? 'installed' : 'not installed'} (${file})\n`);
+    // Claude Code は StopFailure の stdout を捨てるので、最後に何が起きたかはここでしか確認できない。
+    const { lastEvent } = loadState();
+    if (lastEvent) {
+      process.stdout.write(`last event: ${new Date(lastEvent.at).toISOString()} [${lastEvent.kind}] ${lastEvent.message}\n`);
+    } else {
+      process.stdout.write('last event: none\n');
+    }
     return 0;
   }
 
