@@ -11,6 +11,19 @@ function report(kind, message) {
   process.stdout.write(JSON.stringify({ systemMessage: message }) + '\n');
 }
 
+// `rate_limit` は「アカウントが使えなくなった」以外の状況でも発火する。
+// 上限に当たってもモデルのフォールバックで応答が続いた場合、Claude Code は
+// ユーザーに何も見せない代わりに定型の内部メッセージを最後の応答として残す。
+// これを切り替えの合図と取ると、実際には作業が続いているのにペインが増えてしまう。
+const HANDLED_ELSEWHERE_MESSAGES = new Set(['No response requested.']);
+
+function isHandledElsewhere(payload) {
+  const last = typeof payload.last_assistant_message === 'string'
+    ? payload.last_assistant_message.trim()
+    : '';
+  return HANDLED_ELSEWHERE_MESSAGES.has(last);
+}
+
 function isCooling(state, name, minutes) {
   const at = state.rateLimited?.[name];
   return at && Date.now() - at < minutes * 60 * 1000;
@@ -29,6 +42,7 @@ export async function runRateLimitHook(input) {
     const auto = config.autoSwitch || {};
     if (auto.mode === 'off') return 0;
     if (payload.error && payload.error !== 'rate_limit') return 0;
+    if (isHandledElsewhere(payload)) return 0;
 
     const current = readAccount(currentDir());
     recordRateLimit(current.name);
@@ -66,6 +80,7 @@ export async function runRateLimitHook(input) {
         fromAccount: current,
         cwd: payload.cwd || process.cwd(),
         sessionId,
+        transcriptPath: payload.transcript_path || null,
         resume: auto.resume !== false,
       });
       const command = preview.detail;
@@ -79,6 +94,7 @@ export async function runRateLimitHook(input) {
       fromAccount: current,
       cwd: payload.cwd || process.cwd(),
       sessionId,
+      transcriptPath: payload.transcript_path || null,
       resume: auto.resume !== false,
       continueMessage: auto.resume === false ? null : auto.continueMessage,
     });

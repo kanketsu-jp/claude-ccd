@@ -128,6 +128,3 @@ export function expandArgAliases(args = [], config = {}) {
   return out;
 }
 
-export function projectKey(cwd) {
-  return String(cwd || process.cwd()).replaceAll('/', '-').replaceAll('.', '-');
-}

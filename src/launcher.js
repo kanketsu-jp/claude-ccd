@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from './config.js';
-import { commandExists, projectKey, run, shellQuote } from './util.js';
+import { commandExists, run, shellQuote } from './util.js';
 
 export function detectLauncher(config = loadConfig()) {
   const desired = config.autoSwitch?.launcher || 'auto';
@@ -24,14 +24,35 @@ export function buildCommand(account, { resumeSessionId = null, extraArgs = [] }
   return `CLAUDE_CONFIG_DIR=${shellQuote(account.dir)} ${quoted}`;
 }
 
-export function linkSessionHistory(fromAccount, toAccount, cwd, sessionId) {
+// 履歴ディレクトリ名は cwd から機械的に導かれるが、その変換規則を推測で再実装すると
+// スペースや記号を含むパスで食い違う。実在するファイルを探し当てるほうが確実なので、
+// フックが渡してくる transcript_path を優先し、無ければ projects 配下を 1 段だけ走査する。
+export function findTranscript(account, sessionId, transcriptPath) {
+  if (!account || !sessionId) return null;
+  if (transcriptPath && fs.existsSync(transcriptPath)) return transcriptPath;
+  const projectsDir = path.join(account.dir, 'projects');
+  let entries = [];
+  try {
+    entries = fs.readdirSync(projectsDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+export function linkSessionHistory(fromAccount, toAccount, sessionId, transcriptPath) {
   if (!fromAccount || !toAccount || !sessionId) return false;
-  const key = projectKey(cwd);
-  const source = path.join(fromAccount.dir, 'projects', key, `${sessionId}.jsonl`);
-  const targetDir = path.join(toAccount.dir, 'projects', key);
+  const source = findTranscript(fromAccount, sessionId, transcriptPath);
+  if (!source) return false;
+  // 切り替え先も同じ cwd から同じディレクトリ名を導くので、元のディレクトリ名をそのまま使う。
+  const targetDir = path.join(toAccount.dir, 'projects', path.basename(path.dirname(source)));
   const target = path.join(targetDir, `${sessionId}.jsonl`);
   try {
-    if (!fs.existsSync(source)) return false;
     fs.mkdirSync(targetDir, { recursive: true });
     if (!fs.existsSync(target)) fs.symlinkSync(source, target);
     return true;
@@ -40,9 +61,9 @@ export function linkSessionHistory(fromAccount, toAccount, cwd, sessionId) {
   }
 }
 
-function resumeIdForLaunch(fromAccount, toAccount, cwd, sessionId, resume) {
+function resumeIdForLaunch(fromAccount, toAccount, sessionId, resume, transcriptPath) {
   if (!resume || !sessionId) return null;
-  return linkSessionHistory(fromAccount, toAccount, cwd, sessionId) ? sessionId : null;
+  return linkSessionHistory(fromAccount, toAccount, sessionId, transcriptPath) ? sessionId : null;
 }
 
 // herdr の応答は {"id": "<request id>", "result": {"type": "pane_info", "pane": {...}}} という
@@ -61,7 +82,7 @@ export function extractPaneId(stdout) {
 
 export function launchHerdr(account, options = {}) {
   const cwd = options.cwd || process.cwd();
-  const resumeSessionId = resumeIdForLaunch(options.fromAccount, account, cwd, options.sessionId, options.resume);
+  const resumeSessionId = resumeIdForLaunch(options.fromAccount, account, options.sessionId, options.resume, options.transcriptPath);
   const splitArgs = ['pane', 'split', '--direction', 'right', '--cwd', cwd, '--focus'];
   if (!account.isDefault) splitArgs.splice(splitArgs.length - 1, 0, '--env', `CLAUDE_CONFIG_DIR=${account.dir}`);
   const split = run('herdr', splitArgs);
@@ -82,7 +103,7 @@ export function launchHerdr(account, options = {}) {
 
 export function launchTmux(account, options = {}) {
   const cwd = options.cwd || process.cwd();
-  const resumeSessionId = resumeIdForLaunch(options.fromAccount, account, cwd, options.sessionId, options.resume);
+  const resumeSessionId = resumeIdForLaunch(options.fromAccount, account, options.sessionId, options.resume, options.transcriptPath);
   const command = buildCommand(account, { resumeSessionId, extraArgs: options.extraArgs || [] });
   const result = run('tmux', ['split-window', '-h', '-c', cwd, '-P', '-F', '#{pane_id}', command]);
   if (result.status !== 0) return { ok: false, launcher: 'tmux', detail: result.stderr || result.stdout };
@@ -93,7 +114,7 @@ export function launchTmux(account, options = {}) {
 
 export function launchNone(account, options = {}) {
   const cwd = options.cwd || process.cwd();
-  const resumeSessionId = resumeIdForLaunch(options.fromAccount, account, cwd, options.sessionId, options.resume);
+  const resumeSessionId = resumeIdForLaunch(options.fromAccount, account, options.sessionId, options.resume, options.transcriptPath);
   return { ok: true, launcher: 'none', detail: buildCommand(account, { resumeSessionId, extraArgs: options.extraArgs || [] }) };
 }
 
