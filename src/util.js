@@ -69,6 +69,10 @@ export function findCommandOnPath(cmd, env = process.env) {
     for (const ext of extensions) {
       const file = path.join(dir, cmd + ext);
       try {
+        // ディレクトリの実行権限は「検索権限」を意味し X_OK に通ってしまうため、
+        // 通常ファイルであることを先に確かめる（同名ディレクトリを掴むと
+        // spawn が失敗し、claude へのフォールバックも起きなくなる）。
+        if (!fs.statSync(file).isFile()) continue;
         fs.accessSync(file, fs.constants.X_OK);
         return file;
       } catch {
