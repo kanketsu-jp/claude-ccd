@@ -60,6 +60,25 @@ export function commandExists(cmd) {
   return false;
 }
 
+export function findCommandOnPath(cmd, env = process.env) {
+  if (!cmd || cmd.includes(path.sep)) return null;
+  const pathValue = env.PATH || '';
+  const extensions = process.platform === 'win32' ? (env.PATHEXT || '').split(path.delimiter).filter(Boolean) : [''];
+  for (const dir of pathValue.split(path.delimiter)) {
+    if (!dir || !path.isAbsolute(dir)) continue;
+    for (const ext of extensions) {
+      const file = path.join(dir, cmd + ext);
+      try {
+        fs.accessSync(file, fs.constants.X_OK);
+        return file;
+      } catch {
+        // 外部サブコマンドは絶対パスの PATH エントリだけを探索する。
+      }
+    }
+  }
+  return null;
+}
+
 export function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -127,4 +146,3 @@ export function expandArgAliases(args = [], config = {}) {
   }
   return out;
 }
-

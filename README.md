@@ -65,6 +65,36 @@ Requires Node.js >= 18.17, macOS or Linux, and an installed
 Accounts can be addressed by **name** (`work`), by **path**, or by a
 **substring of the email** (`ccd use work.example`).
 
+## External subcommands
+
+`ccd <name> [args...]` delegates to an executable named `ccd-<name>` when it is
+available on `PATH`. This lets separate packages add commands without adding
+dependencies to `ccd` itself.
+
+Only command-like names are considered for delegation: they must match
+`^[a-z][a-z0-9-]*$`. Flags are never treated as external subcommands, so
+`ccd --dangerously-skip-permissions` still falls through to Claude Code.
+
+For example, if an executable named `ccd-hello` is available on `PATH`, then:
+
+```bash
+ccd hello Ada
+```
+
+runs:
+
+```bash
+ccd-hello Ada
+```
+
+External subcommands receive these environment variables:
+
+| Variable | Value |
+| --- | --- |
+| `CCD_ACCOUNT` | Current account name |
+| `CCD_CONFIG_DIR` | Current Claude Code config directory |
+| `CCD_BIN_VERSION` | Installed `ccd` package version |
+
 ## Adding an account
 
 ```bash

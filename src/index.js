@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { currentDir, nameForDir } from './accounts.js';
 import { loadConfig } from './config.js';
-import { commandExists, expandArgAliases } from './util.js';
+import { commandExists, expandArgAliases, findCommandOnPath } from './util.js';
 import * as listCmd from './commands/list.js';
 import * as useCmd from './commands/use.js';
 import * as addCmd from './commands/add.js';
@@ -49,6 +49,7 @@ Commands:
   shell-init [shell]       Print shell integration
   current                  Print current account name
   doctor                   Check local setup
+  <name> [args...]         Delegate to ccd-<name> on PATH if available
   help                     Show this help
   version                  Show package version
 `;
@@ -74,6 +75,28 @@ function launchClaude(args) {
   return typeof result.status === 'number' ? result.status : 1;
 }
 
+function isExternalSubcommandName(command) {
+  return /^[a-z][a-z0-9-]*$/.test(command);
+}
+
+function launchExternalSubcommand(command, args) {
+  if (!isExternalSubcommandName(command)) return null;
+  const bin = findCommandOnPath(`ccd-${command}`);
+  if (!bin) return null;
+  const configDir = currentDir();
+  const result = spawnSync(bin, args, {
+    stdio: 'inherit',
+    shell: false,
+    env: {
+      ...process.env,
+      CCD_ACCOUNT: nameForDir(configDir),
+      CCD_CONFIG_DIR: configDir,
+      CCD_BIN_VERSION: packageVersion(),
+    },
+  });
+  return typeof result.status === 'number' ? result.status : 1;
+}
+
 export async function main(argv = []) {
   try {
     const command = argv[0];
@@ -91,7 +114,8 @@ export async function main(argv = []) {
     } else if (commands.has(command)) {
       exitCode = await commands.get(command).run(argv.slice(1));
     } else {
-      exitCode = launchClaude(argv);
+      const externalExitCode = launchExternalSubcommand(command, argv.slice(1));
+      exitCode = typeof externalExitCode === 'number' ? externalExitCode : launchClaude(argv);
     }
     process.exitCode = exitCode;
     return exitCode;
