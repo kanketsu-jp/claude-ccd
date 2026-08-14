@@ -9,6 +9,12 @@ export const defaultConfig = {
   // 短縮フラグ -> 実引数の展開表。例: {"-y": ["--dangerously-skip-permissions"]}
   argAliases: {},
   extraDirs: [],
+  // `ccd use` で切り替えるとき、今いる cwd の会話履歴を切替元から切替先へコピーする設定。
+  // limit は「新しい順に何本コピーするか」(0 以下ですべて)。
+  copySessions: {
+    enabled: true,
+    limit: 5,
+  },
   autoSwitch: {
     mode: 'notify',
     cooldownMinutes: 60,

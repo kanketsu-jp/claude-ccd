@@ -53,7 +53,7 @@ Requires Node.js >= 18.17, macOS or Linux, and an installed
 | --- | --- |
 | `ccd` | Launch Claude Code with the current account (passes args through) |
 | `ccd list` | List accounts: config dir, email, plan, login state |
-| `ccd use <name\|email>` | Switch the current shell to another account |
+| `ccd use <name\|email>` | Switch the current shell to another account (copies this directory's session history along) |
 | `ccd add [name]` | Create a new config dir (auto-numbers if name is omitted) |
 | `ccd status [name\|email]` | Show details, including the keychain entry it maps to |
 | `ccd run <name\|email> [args]` | Run Claude Code as another account without switching the shell |
@@ -64,6 +64,34 @@ Requires Node.js >= 18.17, macOS or Linux, and an installed
 
 Accounts can be addressed by **name** (`work`), by **path**, or by a
 **substring of the email** (`ccd use work.example`).
+
+## Session history follows you
+
+Claude Code stores conversations under `<config dir>/projects/`, so switching
+accounts normally hides them: `claude --continue` in the new account finds
+nothing. `ccd use` therefore copies the transcripts **for the current working
+directory** from the account you are leaving into the one you are entering,
+newest first.
+
+```bash
+ccd use work                 # copy the 5 newest sessions for this directory
+ccd use work --sessions 1    # only the most recent one
+ccd use work --sessions all  # every session recorded for this directory
+ccd use work --no-sessions   # switch without copying
+```
+
+Details:
+
+- Only this directory's history is copied — other projects are left alone.
+- A transcript already present in the target account is **never overwritten**
+  when it is the same size or longer, so a conversation you continued over
+  there is not rolled back.
+- A copy failure never blocks the switch; the `export` is still printed.
+- Defaults live in `~/.config/ccd/config.json`:
+
+```json
+{ "copySessions": { "enabled": true, "limit": 5 } }
+```
 
 ## External subcommands
 

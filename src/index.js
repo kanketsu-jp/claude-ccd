@@ -40,6 +40,8 @@ Usage:
 Commands:
   list, ls                 List accounts
   use <account>            Print shell code to switch account
+                           (copies this directory's sessions; --no-sessions,
+                            --sessions <n|all> to change)
   add [name]               Create a new account directory
   status, st [account]     Show account status
   run <account> [args...]  Run claude with an account
