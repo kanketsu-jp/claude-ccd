@@ -17,11 +17,15 @@ function setup() {
     // ログイン済みとみなされるよう、macOS 以外の認証情報ファイルを置く。
     fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}');
   }
+  const bin = path.join(home, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'security'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const env = {
     ...process.env,
     HOME: home,
     XDG_CONFIG_HOME: path.join(home, '.config'),
     XDG_STATE_HOME: path.join(home, '.state'),
+    PATH: `${bin}${path.delimiter}${process.env.PATH}`,
   };
   delete env.CLAUDE_CONFIG_DIR;
   run(['config', 'set', 'autoSwitch.mode', 'auto'], env);
@@ -81,4 +85,17 @@ test('the hook exits 0 even when the payload is malformed', () => {
   const { env } = setup();
   const out = run(['hook', 'rate-limit'], env, 'not json');
   assert.equal(typeof out, 'string');
+});
+
+test('the hook updates preferredAccount to a healthy account after a rate limit', () => {
+  const { home, env } = setup();
+  run(['config', 'set', 'autoSwitch.mode', 'notify'], env);
+  run(['config', 'set', 'autoSwitch.order', '["a","b"]'], env);
+
+  fire(env, { ...base, session_id: 'C', last_assistant_message: 'limit reached' });
+
+  const config = JSON.parse(fs.readFileSync(path.join(home, '.config', 'ccd', 'config.json'), 'utf8'));
+  const state = JSON.parse(fs.readFileSync(path.join(home, '.state', 'ccd', 'state.json'), 'utf8'));
+  assert.equal(config.preferredAccount, 'a');
+  assert.match(state.lastEvent.message, /Preferred account changed to a/);
 });

@@ -94,14 +94,6 @@ function mtimeMs(file) {
   }
 }
 
-function sizeOf(file) {
-  try {
-    return fs.statSync(file).size;
-  } catch {
-    return -1;
-  }
-}
-
 function copyFileAtomic(source, target) {
   const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
   fs.copyFileSync(source, tmp);
@@ -150,9 +142,8 @@ export function copySessionHistory(fromDir, toDir, cwd, options = {}) {
   for (const name of selected) {
     const sourceFile = path.join(source, name);
     const targetFile = path.join(targetDir, name);
-    // 既に同じか、より長い履歴が置かれているなら上書きしない (切替先で進めた会話を潰さない)。
-    const targetSize = sizeOf(targetFile);
-    if (targetSize >= 0 && targetSize >= sizeOf(sourceFile)) {
+    // 既に同じか、より新しい履歴が置かれているなら上書きしない (切替先で進めた会話を潰さない)。
+    if (fs.existsSync(targetFile) && mtimeMs(targetFile) >= mtimeMs(sourceFile)) {
       result.skipped.push(name);
       continue;
     }

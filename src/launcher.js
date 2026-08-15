@@ -15,6 +15,52 @@ export function claudeBin(config = loadConfig()) {
   return config.claudeBin || 'claude';
 }
 
+export function extractResumeSessionId(commandLine) {
+  const text = String(commandLine || '');
+  const equals = text.match(/(?:^|\s)--resume=([0-9a-fA-F-]{36})(?:\s|$)/);
+  if (equals) return equals[1];
+  const spaced = text.match(/(?:^|\s)--resume\s+([0-9a-fA-F-]{36})(?:\s|$)/);
+  return spaced ? spaced[1] : null;
+}
+
+export function resumeSessionIdFromArgs(args = []) {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = String(args[i]);
+    if (arg === '--resume' && args[i + 1]) return String(args[i + 1]);
+    if (arg.startsWith('--resume=')) return arg.slice('--resume='.length);
+  }
+  return null;
+}
+
+export function parsePsOutput(stdout) {
+  return String(stdout || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(\S+)(?:\s+(.+))?$/);
+      if (!match) return null;
+      const command = match[4] || match[3];
+      return { pid: Number(match[1]), ppid: Number(match[2]), comm: match[3], command };
+    })
+    .filter(Boolean);
+}
+
+export function isClaudeProcess(proc) {
+  const candidates = [proc?.comm, proc?.name, proc?.argv0, Array.isArray(proc?.argv) ? proc.argv[0] : null];
+  return candidates.some((value) => path.basename(String(value || '')) === 'claude');
+}
+
+export function runningClaudeProcesses() {
+  const result = run('ps', ['-axo', 'pid=,ppid=,comm=,args=']);
+  if (result.status !== 0) return [];
+  return parsePsOutput(result.stdout).filter((proc) => isClaudeProcess(proc) && extractResumeSessionId(proc.command));
+}
+
+export function findRunningSession(sessionId) {
+  return runningClaudeProcesses().find((proc) => extractResumeSessionId(proc.command) === sessionId) || null;
+}
+
 export function buildCommand(account, { resumeSessionId = null, extraArgs = [] } = {}) {
   const config = loadConfig();
   const args = [...(config.launchArgs || []), ...extraArgs];

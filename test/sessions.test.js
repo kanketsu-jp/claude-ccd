@@ -86,14 +86,16 @@ test('copySessionHistory with limit 0 copies every transcript', () => {
   assert.equal(result.copied.length, 2);
 });
 
-test('copySessionHistory does not overwrite a longer transcript at the target', () => {
-  // 切替先で会話を進めた後にもう一度 use しても、進んだ履歴を巻き戻さないこと。
+test('copySessionHistory keeps the transcript with the newer mtime', () => {
+  // 切替先で会話を進めた後にもう一度 use しても、更新時刻の新しい履歴を巻き戻さないこと。
   const home = tmpdir();
   const cwd = '/work/proj';
   const from = path.join(home, '.claude');
   const to = path.join(home, '.claude-work');
-  writeTranscript(path.join(from, 'projects', encodeProjectDirName(cwd)), 'a.jsonl', cwd, 1);
-  const targetFile = writeTranscript(path.join(to, 'projects', encodeProjectDirName(cwd)), 'a.jsonl', cwd, 50);
+  const sourceFile = writeTranscript(path.join(from, 'projects', encodeProjectDirName(cwd)), 'a.jsonl', cwd, 50);
+  const targetFile = writeTranscript(path.join(to, 'projects', encodeProjectDirName(cwd)), 'a.jsonl', cwd, 1);
+  fs.utimesSync(sourceFile, new Date(1000), new Date(1000));
+  fs.utimesSync(targetFile, new Date(2000), new Date(2000));
   const before = fs.readFileSync(targetFile, 'utf8');
 
   const result = copySessionHistory(from, to, cwd, { limit: 5 });

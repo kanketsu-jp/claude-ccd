@@ -57,7 +57,9 @@ Requires Node.js >= 18.17, macOS or Linux, and an installed
 | `ccd add [name]` | Create a new config dir (auto-numbers if name is omitted) |
 | `ccd status [name\|email]` | Show details, including the keychain entry it maps to |
 | `ccd run <name\|email> [args]` | Run Claude Code as another account without switching the shell |
-| `ccd sync <name\|email>` | Share skills/rules/agents/commands + merge MCP servers from the default account |
+| `ccd sync <name\|email>` | Share skills/rules/agents/commands/statusline/projects + merge selected settings from the default account |
+| `ccd default [name\|email] [--auto] [--clear]` | Show, set, auto-pick, or clear the account used when `CLAUDE_CONFIG_DIR` is unset |
+| `ccd switch-all <name\|email> [--dry-run] [--include-self]` | Move running herdr/tmux panes with `--resume <sid>` to another account |
 | `ccd doctor` | Diagnose setup problems |
 | `ccd hook install` | Install the rate-limit auto-switch hook |
 | `ccd config` | Read/write `~/.config/ccd/config.json` |
@@ -135,6 +137,22 @@ ccd list              # LOGIN should now read "ok"
 Each config dir is fully independent: its own settings, history, MCP servers and
 credentials. `ccd sync` exists so you don't have to set all of that up twice.
 
+`ccd sync` links shared files from `~/.claude`, including
+`statusline-command.sh`. It also links `projects/` by default so sessions are
+shared across accounts. If the target already has a real `projects/` directory,
+ccd merges its contents into `~/.claude/projects`, keeps the newer `.jsonl` when
+names collide, preserves the losing copy as `.bak-*`, renames the original
+target directory to `projects.bak-*`, and only then creates the symlink.
+
+```bash
+ccd sync work --dry-run
+ccd sync work --no-projects
+ccd sync work --no-settings
+```
+
+`settings.json` is never symlinked wholesale. Only the `statusLine` key is
+merged from the default account, so account-specific hooks stay local.
+
 ## Auto-switch on rate limit
 
 ```bash
@@ -149,9 +167,10 @@ so detection does not depend on matching English error text.
 When it fires, `ccd`:
 
 1. records that the current account is rate-limited,
-2. picks the next account that is logged in and not in cooldown,
-3. opens a new pane for it (herdr or tmux), resuming the same session,
-4. sends a continue message.
+2. updates the preferred default account when `autoSwitch.updateDefault` is on,
+3. picks the next account that is logged in and not in cooldown,
+4. opens a new pane for it (herdr or tmux), resuming the same session,
+5. sends a continue message.
 
 In `notify` mode it stops after step 2 and just tells you the command to run.
 
@@ -177,6 +196,7 @@ you let it, so it is bounded by default:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `autoSwitch.mode` | `notify` | `auto` \| `notify` \| `off` |
+| `autoSwitch.updateDefault` | `true` | Change `preferredAccount` after a rate limit |
 | `autoSwitch.cooldownMinutes` | `60` | How long a rate-limited account is skipped |
 | `autoSwitch.minIntervalMinutes` | `5` | Minimum gap between switches in one session |
 | `autoSwitch.maxSwitchesPerHour` | `4` | Global ceiling — the runaway stop |
@@ -187,6 +207,23 @@ you let it, so it is bounded by default:
 ccd config set autoSwitch.mode auto
 ccd config set autoSwitch.cooldownMinutes 90
 ```
+
+### Dynamic default account
+
+When `CLAUDE_CONFIG_DIR` is unset, `ccd` normally uses `~/.claude`. Set a
+preferred account to make plain `ccd` and newly initialized shells start on a
+different account without moving or symlinking `~/.claude`.
+
+```bash
+ccd default              # show current default and source
+ccd default work         # save preferredAccount as "work"
+ccd default --auto       # choose a logged-in account that is not cooling down
+ccd default --clear      # fall back to ~/.claude
+```
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `preferredAccount` | `null` | Account name used as the default when `CLAUDE_CONFIG_DIR` is unset |
 
 ## Launch options
 

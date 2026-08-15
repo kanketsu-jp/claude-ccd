@@ -108,6 +108,9 @@ export function resolveAccount(query) {
   }
 
   const lower = q.toLowerCase();
+  const exactNameMatches = accounts.filter((account) => account.name.toLowerCase() === lower);
+  if (exactNameMatches.length === 1) return { account: exactNameMatches[0] };
+
   const matches = accounts.filter((account) => {
     if (account.name.toLowerCase() === lower) return true;
     return account.email ? account.email.toLowerCase().includes(lower) : false;
@@ -118,6 +121,52 @@ export function resolveAccount(query) {
   const guessed = dirForName(q);
   if (fs.existsSync(guessed)) return { account: readAccount(guessed) };
   return { error: 'not-found' };
+}
+
+// クォータはアカウント（メール）単位で共有されるため、レートリミットの発生時刻は
+// 「その名前で記録されたもの」だけでなく「同じメールの別 config dir で記録されたもの」も見る。
+//
+// state.rateLimitedByEmail は後から入れた記録なので、それ以前に記録された state には
+// 名前しか入っていない。同じメールの他アカウント名を引き当てて補う（移行処理を別途走らせない）。
+export function rateLimitedAtFor(account, state = {}, accounts = null) {
+  const email = account?.email ? account.email.toLowerCase() : null;
+  const times = [Number(state.rateLimited?.[account?.name] || 0), Number(email ? state.rateLimitedByEmail?.[email] || 0 : 0)];
+  if (email) {
+    const siblings = accounts || listAccounts();
+    for (const other of siblings) {
+      if (!other.email || other.email.toLowerCase() !== email) continue;
+      times.push(Number(state.rateLimited?.[other.name] || 0));
+    }
+  }
+  return Math.max(...times);
+}
+
+export function isHealthy(account, state = {}, config = {}, accounts = null) {
+  if (!account?.loggedIn) return false;
+  const at = rateLimitedAtFor(account, state, accounts);
+  if (!at) return true;
+  const minutes = Number(config.autoSwitch?.cooldownMinutes || 0);
+  return Date.now() - at >= minutes * 60 * 1000;
+}
+
+export function orderAccounts(accounts, order = []) {
+  if (!Array.isArray(order) || order.length === 0) return accounts;
+  const rank = new Map(order.map((name, i) => [String(name), i]));
+  return [...accounts].sort((a, b) => (rank.get(a.name) ?? 9999) - (rank.get(b.name) ?? 9999));
+}
+
+export function chooseHealthyAccount(accounts, state = {}, config = {}, { excludeName = null } = {}) {
+  return orderAccounts(accounts, config.autoSwitch?.order || [])
+    .filter((account) => !excludeName || account.name !== excludeName)
+    .find((account) => isHealthy(account, state, config)) || null;
+}
+
+export function resolveDefaultAccount(config = loadConfig()) {
+  if (config.preferredAccount) {
+    const resolved = resolveAccount(config.preferredAccount);
+    if (resolved.account) return resolved.account;
+  }
+  return readAccount(defaultDir());
 }
 
 export function envForAccount(account) {
