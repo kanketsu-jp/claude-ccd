@@ -53,17 +53,50 @@ Requires Node.js >= 18.17, macOS or Linux, and an installed
 | --- | --- |
 | `ccd` | Launch Claude Code with the current account (passes args through) |
 | `ccd list` | List accounts: config dir, email, plan, login state |
-| `ccd use <name\|email>` | Switch the current shell to another account |
+| `ccd use <name\|email>` | Switch the current shell to another account (copies this directory's session history along) |
 | `ccd add [name]` | Create a new config dir (auto-numbers if name is omitted) |
 | `ccd status [name\|email]` | Show details, including the keychain entry it maps to |
 | `ccd run <name\|email> [args]` | Run Claude Code as another account without switching the shell |
-| `ccd sync <name\|email>` | Share skills/rules/agents/commands + merge MCP servers from the default account |
+| `ccd sync <name\|email>` | Share skills/rules/agents/commands/statusline/projects + merge selected settings from the default account |
+| `ccd default [name\|email] [--auto] [--clear]` | Show, set, auto-pick, or clear the account used when `CLAUDE_CONFIG_DIR` is unset |
+| `ccd switch-all <name\|email> [--dry-run] [--include-self]` | Move running herdr/tmux panes with `--resume <sid>` to another account |
+| `ccd disable [name\|email]` | Exclude an account from automatic switching (list disabled ones with no arg) |
+| `ccd enable <name\|email>` | Re-include a disabled account |
 | `ccd doctor` | Diagnose setup problems |
 | `ccd hook install` | Install the rate-limit auto-switch hook |
+| `ccd hook install-usage` | Install the statusline usage failover hook |
 | `ccd config` | Read/write `~/.config/ccd/config.json` |
 
 Accounts can be addressed by **name** (`work`), by **path**, or by a
 **substring of the email** (`ccd use work.example`).
+
+## Session history follows you
+
+Claude Code stores conversations under `<config dir>/projects/`, so switching
+accounts normally hides them: `claude --continue` in the new account finds
+nothing. `ccd use` therefore copies the transcripts **for the current working
+directory** from the account you are leaving into the one you are entering,
+newest first.
+
+```bash
+ccd use work                 # copy the 5 newest sessions for this directory
+ccd use work --sessions 1    # only the most recent one
+ccd use work --sessions all  # every session recorded for this directory
+ccd use work --no-sessions   # switch without copying
+```
+
+Details:
+
+- Only this directory's history is copied — other projects are left alone.
+- A transcript already present in the target account is **never overwritten**
+  when it is the same size or longer, so a conversation you continued over
+  there is not rolled back.
+- A copy failure never blocks the switch; the `export` is still printed.
+- Defaults live in `~/.config/ccd/config.json`:
+
+```json
+{ "copySessions": { "enabled": true, "limit": 5 } }
+```
 
 ## External subcommands
 
@@ -107,6 +140,22 @@ ccd list              # LOGIN should now read "ok"
 Each config dir is fully independent: its own settings, history, MCP servers and
 credentials. `ccd sync` exists so you don't have to set all of that up twice.
 
+`ccd sync` links shared files from `~/.claude`, including
+`statusline-command.sh`. It also links `projects/` by default so sessions are
+shared across accounts. If the target already has a real `projects/` directory,
+ccd merges its contents into `~/.claude/projects`, keeps the newer `.jsonl` when
+names collide, preserves the losing copy as `.bak-*`, renames the original
+target directory to `projects.bak-*`, and only then creates the symlink.
+
+```bash
+ccd sync work --dry-run
+ccd sync work --no-projects
+ccd sync work --no-settings
+```
+
+`settings.json` is never symlinked wholesale. Only the `statusLine` key is
+merged from the default account, so account-specific hooks stay local.
+
 ## Auto-switch on rate limit
 
 ```bash
@@ -121,9 +170,10 @@ so detection does not depend on matching English error text.
 When it fires, `ccd`:
 
 1. records that the current account is rate-limited,
-2. picks the next account that is logged in and not in cooldown,
-3. opens a new pane for it (herdr or tmux), resuming the same session,
-4. sends a continue message.
+2. updates the preferred default account when `autoSwitch.updateDefault` is on,
+3. picks the next account that is logged in and not in cooldown,
+4. opens a new pane for it (herdr or tmux), resuming the same session,
+5. sends a continue message.
 
 In `notify` mode it stops after step 2 and just tells you the command to run.
 
@@ -141,6 +191,39 @@ Only `rate_limit` triggers a switch. Other stop failures Claude Code reports —
 `overloaded`, `server_error` and the rest — are capacity or request problems
 that another account would hit just the same, so `ccd` leaves them alone.
 
+### Usage failover before the weekly cap
+
+Claude Code の週間クォータ使用率は statusline に渡る JSON でだけ読めます。
+`ccd hook install-usage` はその JSON を `ccd hook usage` に流し込み、既定では
+`rate_limits.seven_day.used_percentage` が 90% 以上になった時点で
+`switch-all` 相当の処理を走らせます。実際に 1 台以上のペインが別アカウントへ
+移った場合だけ、同じクォータ期間の再発火を止めます。
+
+```bash
+ccd hook install --mode auto
+ccd hook install-usage
+ccd config set autoSwitch.usageThreshold 90
+```
+
+既存の `statusLine` がある場合、`install-usage` は上書きしません。代わりに
+既存 statusline へ足す 3 行のスニペットを表示します。
+
+### Excluding an account
+
+自動選択に使ってほしくないアカウントは候補から外せます。
+
+```bash
+ccd disable kimura   # 自動選択から除外（手動の `ccd use kimura` は可能）
+ccd enable  kimura   # 戻す
+ccd disable          # 無効化中の一覧
+```
+
+除外は `isHealthy()` で判定するため、**レートリミット時の切替先・使用率フェイルオーバー・
+既定アカウントの候補のすべてに効きます**。手動の `ccd use` / `ccd run` は別経路なので影響しません。
+全アカウントを無効化すると自動切替の行き先が無くなるので、最後の 1 つは無効化できません。
+
+設定は `~/.config/ccd/config.json` の `disabledAccounts` に保存されます。
+
 ### Safety limits
 
 Auto-switching a coding agent is the kind of automation that can loop forever if
@@ -149,16 +232,37 @@ you let it, so it is bounded by default:
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `autoSwitch.mode` | `notify` | `auto` \| `notify` \| `off` |
+| `autoSwitch.updateDefault` | `true` | Change `preferredAccount` after a rate limit |
 | `autoSwitch.cooldownMinutes` | `60` | How long a rate-limited account is skipped |
 | `autoSwitch.minIntervalMinutes` | `5` | Minimum gap between switches in one session |
 | `autoSwitch.maxSwitchesPerHour` | `4` | Global ceiling — the runaway stop |
 | `autoSwitch.resume` | `true` | Resume the same session on the new account |
 | `autoSwitch.launcher` | `auto` | `auto` \| `herdr` \| `tmux` \| `none` |
+| `autoSwitch.usageThreshold` | `90` | 週間使用率がこの % 以上で先回り切替。`0` or `null` で無効 |
+| `autoSwitch.usageWatch` | `null` | 監視対象アカウント名。`null` なら現在アカウントを常に対象 |
 
 ```bash
 ccd config set autoSwitch.mode auto
 ccd config set autoSwitch.cooldownMinutes 90
+ccd config set autoSwitch.usageWatch work
 ```
+
+### Dynamic default account
+
+When `CLAUDE_CONFIG_DIR` is unset, `ccd` normally uses `~/.claude`. Set a
+preferred account to make plain `ccd` and newly initialized shells start on a
+different account without moving or symlinking `~/.claude`.
+
+```bash
+ccd default              # show current default and source
+ccd default work         # save preferredAccount as "work"
+ccd default --auto       # choose a logged-in account that is not cooling down
+ccd default --clear      # fall back to ~/.claude
+```
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `preferredAccount` | `null` | Account name used as the default when `CLAUDE_CONFIG_DIR` is unset |
 
 ## Launch options
 

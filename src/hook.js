@@ -1,8 +1,9 @@
-import { currentDir, listAccounts, readAccount } from './accounts.js';
-import { loadConfig } from './config.js';
+import { chooseHealthyAccount, currentDir, isHealthy, listAccounts, orderAccounts, readAccount } from './accounts.js';
+import { runSwitchAll } from './commands/switchAll.js';
+import { loadConfig, saveConfig } from './config.js';
 import { launchAccount, launchNone } from './launcher.js';
 import { notify } from './notify.js';
-import { loadState, recordEvent, recordRateLimit, recordSwitch, switchesInLastHour } from './state.js';
+import { loadState, recordEvent, recordRateLimit, recordSwitch, recordUsageFailover, switchesInLastHour } from './state.js';
 
 // StopFailure は stdout も exit code も無視するため、これは手動実行時のためだけの出力。
 // ユーザーに届くのは notify() と、あとから読める state の lastEvent。
@@ -24,15 +25,88 @@ function isHandledElsewhere(payload) {
   return HANDLED_ELSEWHERE_MESSAGES.has(last);
 }
 
-function isCooling(state, name, minutes) {
-  const at = state.rateLimited?.[name];
-  return at && Date.now() - at < minutes * 60 * 1000;
+function parsePayload(input) {
+  try {
+    return typeof input === 'string' ? JSON.parse(input || '{}') : (input || {});
+  } catch {
+    return {};
+  }
 }
 
-function orderAccounts(accounts, order) {
-  if (!Array.isArray(order) || order.length === 0) return accounts;
-  const rank = new Map(order.map((name, i) => [String(name), i]));
-  return [...accounts].sort((a, b) => (rank.get(a.name) ?? 9999) - (rank.get(b.name) ?? 9999));
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function usagePercent(payload, override) {
+  const overridden = numberOrNull(override);
+  if (overridden != null) return overridden;
+  return numberOrNull(payload?.rate_limits?.seven_day?.used_percentage);
+}
+
+function resetSeconds(payload) {
+  const value = numberOrNull(payload?.rate_limits?.seven_day?.resets_at);
+  if (value != null && value > 0) return value;
+  return Math.ceil((Date.now() + 24 * 60 * 60 * 1000) / 1000);
+}
+
+function isUsageFailoverRecorded(state, accountName) {
+  const last = state.lastUsageFailover;
+  if (!last || last.account !== accountName) return false;
+  const resetMs = Number(last.resetsAt || 0) * 1000;
+  return resetMs > Date.now();
+}
+
+export async function runUsageHook(input, options = {}) {
+  try {
+    const payload = parsePayload(input);
+    const config = loadConfig();
+    const auto = config.autoSwitch || {};
+    if (auto.mode === 'off') return 0;
+
+    const threshold = numberOrNull(auto.usageThreshold);
+    if (!threshold) return 0;
+
+    const used = usagePercent(payload, options.used);
+    if (used == null || used < threshold) return 0;
+
+    const current = readAccount(currentDir());
+    if (auto.usageWatch && String(auto.usageWatch) !== current.name) return 0;
+
+    const state = loadState();
+    if (isUsageFailoverRecorded(state, current.name)) return 0;
+
+    const accounts = listAccounts();
+    const next = chooseHealthyAccount(accounts, state, config, { excludeName: current.name });
+    if (!next) {
+      notify('Claude usage failover failed', 'No logged-in account is available for switching.');
+      report('failed', `Usage failover failed: no alternate logged-in account is available (${used}% >= ${threshold}%).`);
+      return 0;
+    }
+
+    const result = await runSwitchAll([next.name, '--include-self'], {
+      returnResult: true,
+      stdout: () => {},
+      stderr: () => {},
+    });
+
+    if (result.exitCode === 0 && result.switchedCount > 0) {
+      if (auto.updateDefault !== false) saveConfig({ ...config, preferredAccount: next.name });
+      recordUsageFailover({ account: current.name, resetsAt: resetSeconds(payload), at: Date.now() });
+      notify('Claude usage failover', `Switched ${result.switchedCount} pane(s) from ${current.name} to ${next.name}.`);
+      report('usage-switched', `Usage failover: ${used}% >= ${threshold}%. Switched ${result.switchedCount} pane(s) from ${current.name} to ${next.name}.`);
+      return 0;
+    }
+
+    const detail = result.exitCode === 0 && result.switchedCount === 0
+      ? 'no panes were switched'
+      : `${result.failedCount || 0} pane(s) failed`;
+    notify('Claude usage failover failed', detail);
+    report('failed', `Usage failover failed: ${detail} (${used}% >= ${threshold}%).`);
+  } catch (error) {
+    process.stderr.write(`ccd hook usage error: ${error?.message || String(error)}\n`);
+  }
+  return 0;
 }
 
 export async function runRateLimitHook(input) {
@@ -45,32 +119,40 @@ export async function runRateLimitHook(input) {
     if (isHandledElsewhere(payload)) return 0;
 
     const current = readAccount(currentDir());
-    recordRateLimit(current.name);
+    recordRateLimit(current);
     const state = loadState();
     const sessionId = payload.session_id || null;
+    const accounts = listAccounts();
+    const nextDefault = auto.updateDefault !== false
+      ? chooseHealthyAccount(accounts, state, config, { excludeName: current.name })
+      : null;
+    let defaultUpdateMessage = '';
+    if (nextDefault) {
+      const updated = { ...config, preferredAccount: nextDefault.name };
+      saveConfig(updated);
+      defaultUpdateMessage = ` Preferred account changed to ${nextDefault.name}.`;
+    }
 
     if (switchesInLastHour(state) >= Number(auto.maxSwitchesPerHour || 0)) {
       notify('Claude account rate limited', 'Switch limit reached. No account was launched.');
-      report('blocked', 'Rate limit detected, but switch limit has been reached.');
+      report('blocked', `Rate limit detected, but switch limit has been reached.${defaultUpdateMessage}`);
       return 0;
     }
 
     const last = sessionId ? state.lastSwitchBySession?.[sessionId] : null;
     if (last && Date.now() - last < Number(auto.minIntervalMinutes || 0) * 60 * 1000) {
       notify('Claude account rate limited', 'Minimum switch interval has not elapsed.');
-      report('blocked', 'Rate limit detected, but minimum switch interval has not elapsed.');
+      report('blocked', `Rate limit detected, but minimum switch interval has not elapsed.${defaultUpdateMessage}`);
       return 0;
     }
 
-    const cooldown = Number(auto.cooldownMinutes || 0);
-    const candidates = orderAccounts(listAccounts(), auto.order)
+    const candidates = orderAccounts(accounts, auto.order)
       .filter((account) => account.name !== current.name)
-      .filter((account) => account.loggedIn)
-      .filter((account) => !isCooling(state, account.name, cooldown));
+      .filter((account) => isHealthy(account, state, config));
 
     if (candidates.length === 0) {
       notify('Claude account rate limited', 'No logged-in account is available for switching.');
-      report('no-candidate', 'Rate limit detected, but no alternate logged-in account is available.');
+      report('no-candidate', `Rate limit detected, but no alternate logged-in account is available.${defaultUpdateMessage}`);
       return 0;
     }
 
@@ -85,7 +167,7 @@ export async function runRateLimitHook(input) {
       });
       const command = preview.detail;
       notify('Claude account available', `${next.name}: ${command}`);
-      report('suggested', `Rate limit detected. Suggested account: ${next.name}. Command: ${command}`);
+      report('suggested', `Rate limit detected. Suggested account: ${next.name}. Command: ${command}.${defaultUpdateMessage}`);
       return 0;
     }
 
@@ -102,10 +184,10 @@ export async function runRateLimitHook(input) {
     if (result.ok) {
       recordSwitch({ at: Date.now(), fromName: current.name, toName: next.name, sessionId });
       notify('Claude account switched', `Launched ${next.name} with ${result.launcher}.`);
-      report('switched', `Rate limit detected. Launched ${next.name} with ${result.launcher}.`);
+      report('switched', `Rate limit detected. Launched ${next.name} with ${result.launcher}.${defaultUpdateMessage}`);
     } else {
       notify('Claude account switch failed', String(result.detail || 'Unknown launcher error'));
-      report('failed', `Rate limit detected, but launch failed: ${result.detail || 'unknown error'}`);
+      report('failed', `Rate limit detected, but launch failed: ${result.detail || 'unknown error'}.${defaultUpdateMessage}`);
     }
   } catch (error) {
     process.stderr.write(`ccd hook error: ${error?.message || String(error)}\n`);

@@ -1,6 +1,6 @@
 {
   "name": "claude-ccd",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Switch between multiple Claude Code accounts, and auto-switch when you hit a rate limit.",
   "keywords": [
     "claude",

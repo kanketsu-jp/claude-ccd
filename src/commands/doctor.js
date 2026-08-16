@@ -23,6 +23,14 @@ export function run() {
   checks.push(['auto switch candidates', config.autoSwitch.mode === 'off' || switchable > 0, `${config.autoSwitch.mode}, ${switchable} candidate(s)`]);
   const explicitDefault = process.env.CLAUDE_CONFIG_DIR && normalizeDir(process.env.CLAUDE_CONFIG_DIR) === normalizeDir(defaultDir());
   checks.push(['default env trap', !explicitDefault, 'CLAUDE_CONFIG_DIR must be unset for default account']);
+  let defaultRealDir = true;
+  try {
+    const stat = fs.lstatSync(defaultDir());
+    defaultRealDir = stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    defaultRealDir = true;
+  }
+  checks.push(['default dir physical', defaultRealDir, defaultDir()]);
 
   let ok = true;
   for (const [name, pass, detail] of checks) {

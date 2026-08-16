@@ -6,11 +6,21 @@ import { deepMerge, readJson, writeJsonAtomic } from './util.js';
 export const defaultConfig = {
   claudeBin: null,
   launchArgs: [],
+  preferredAccount: null,
+  // 自動選択から除外するアカウント名 (手動の use / run は可能)。`ccd disable <name>` で設定。
+  disabledAccounts: [],
   // 短縮フラグ -> 実引数の展開表。例: {"-y": ["--dangerously-skip-permissions"]}
   argAliases: {},
   extraDirs: [],
+  // `ccd use` で切り替えるとき、今いる cwd の会話履歴を切替元から切替先へコピーする設定。
+  // limit は「新しい順に何本コピーするか」(0 以下ですべて)。
+  copySessions: {
+    enabled: true,
+    limit: 5,
+  },
   autoSwitch: {
     mode: 'notify',
+    updateDefault: true,
     cooldownMinutes: 60,
     minIntervalMinutes: 5,
     maxSwitchesPerHour: 4,
@@ -18,6 +28,8 @@ export const defaultConfig = {
     continueMessage: 'continue',
     order: [],
     launcher: 'auto',
+    usageThreshold: 90,
+    usageWatch: null,
   },
 };
 
