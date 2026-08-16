@@ -51,7 +51,7 @@ Commands:
   status, st [account]     Show account status
   run <account> [args...]  Run claude with an account
   sync <account>           Link shared Claude Code files
-  hook <action>            Manage StopFailure hook
+  hook <action>            Manage StopFailure/statusline hooks
   config <action>          Manage ccd config
   shell-init [shell]       Print shell integration
   current                  Print current account name
@@ -61,6 +61,11 @@ Commands:
   <name> [args...]         Delegate to ccd-<name> on PATH if available
   help                     Show this help
   version                  Show package version
+
+Hook actions:
+  hook install             Install StopFailure rate-limit hook
+  hook install-usage       Install statusline usage failover hook
+  hook usage [--used <n>]  Feed statusline usage JSON to ccd
 `;
 }
 

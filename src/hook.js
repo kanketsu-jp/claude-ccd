@@ -1,8 +1,9 @@
 import { chooseHealthyAccount, currentDir, isHealthy, listAccounts, orderAccounts, readAccount } from './accounts.js';
+import { runSwitchAll } from './commands/switchAll.js';
 import { loadConfig, saveConfig } from './config.js';
 import { launchAccount, launchNone } from './launcher.js';
 import { notify } from './notify.js';
-import { loadState, recordEvent, recordRateLimit, recordSwitch, switchesInLastHour } from './state.js';
+import { loadState, recordEvent, recordRateLimit, recordSwitch, recordUsageFailover, switchesInLastHour } from './state.js';
 
 // StopFailure は stdout も exit code も無視するため、これは手動実行時のためだけの出力。
 // ユーザーに届くのは notify() と、あとから読める state の lastEvent。
@@ -22,6 +23,90 @@ function isHandledElsewhere(payload) {
     ? payload.last_assistant_message.trim()
     : '';
   return HANDLED_ELSEWHERE_MESSAGES.has(last);
+}
+
+function parsePayload(input) {
+  try {
+    return typeof input === 'string' ? JSON.parse(input || '{}') : (input || {});
+  } catch {
+    return {};
+  }
+}
+
+function numberOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function usagePercent(payload, override) {
+  const overridden = numberOrNull(override);
+  if (overridden != null) return overridden;
+  return numberOrNull(payload?.rate_limits?.seven_day?.used_percentage);
+}
+
+function resetSeconds(payload) {
+  const value = numberOrNull(payload?.rate_limits?.seven_day?.resets_at);
+  if (value != null && value > 0) return value;
+  return Math.ceil((Date.now() + 24 * 60 * 60 * 1000) / 1000);
+}
+
+function isUsageFailoverRecorded(state, accountName) {
+  const last = state.lastUsageFailover;
+  if (!last || last.account !== accountName) return false;
+  const resetMs = Number(last.resetsAt || 0) * 1000;
+  return resetMs > Date.now();
+}
+
+export async function runUsageHook(input, options = {}) {
+  try {
+    const payload = parsePayload(input);
+    const config = loadConfig();
+    const auto = config.autoSwitch || {};
+    if (auto.mode === 'off') return 0;
+
+    const threshold = numberOrNull(auto.usageThreshold);
+    if (!threshold) return 0;
+
+    const used = usagePercent(payload, options.used);
+    if (used == null || used < threshold) return 0;
+
+    const current = readAccount(currentDir());
+    if (auto.usageWatch && String(auto.usageWatch) !== current.name) return 0;
+
+    const state = loadState();
+    if (isUsageFailoverRecorded(state, current.name)) return 0;
+
+    const accounts = listAccounts();
+    const next = chooseHealthyAccount(accounts, state, config, { excludeName: current.name });
+    if (!next) {
+      notify('Claude usage failover failed', 'No logged-in account is available for switching.');
+      report('failed', `Usage failover failed: no alternate logged-in account is available (${used}% >= ${threshold}%).`);
+      return 0;
+    }
+
+    const result = await runSwitchAll([next.name, '--include-self'], {
+      returnResult: true,
+      stdout: () => {},
+      stderr: () => {},
+    });
+
+    if (result.exitCode === 0 && result.switchedCount > 0) {
+      if (auto.updateDefault !== false) saveConfig({ ...config, preferredAccount: next.name });
+      recordUsageFailover({ account: current.name, resetsAt: resetSeconds(payload), at: Date.now() });
+      notify('Claude usage failover', `Switched ${result.switchedCount} pane(s) from ${current.name} to ${next.name}.`);
+      report('usage-switched', `Usage failover: ${used}% >= ${threshold}%. Switched ${result.switchedCount} pane(s) from ${current.name} to ${next.name}.`);
+      return 0;
+    }
+
+    const detail = result.exitCode === 0 && result.switchedCount === 0
+      ? 'no panes were switched'
+      : `${result.failedCount || 0} pane(s) failed`;
+    notify('Claude usage failover failed', detail);
+    report('failed', `Usage failover failed: ${detail} (${used}% >= ${threshold}%).`);
+  } catch (error) {
+    process.stderr.write(`ccd hook usage error: ${error?.message || String(error)}\n`);
+  }
+  return 0;
 }
 
 export async function runRateLimitHook(input) {

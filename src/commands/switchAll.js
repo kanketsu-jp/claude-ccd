@@ -271,48 +271,54 @@ export async function switchPane(launcher, item, account, deps = {}) {
   return { ok: false, failed: true, reason: `claude did not start (sid ${item.sessionId})` };
 }
 
-export async function runSwitchAll(args = []) {
+export async function runSwitchAll(args = [], options = {}) {
+  const out = options.stdout || ((text) => process.stdout.write(text));
+  const err = options.stderr || ((text) => process.stderr.write(text));
+  const finish = (exitCode, detail = {}) => {
+    if (options.returnResult) return { exitCode, switchedCount: 0, failedCount: 0, skippedCount: 0, ...detail };
+    return exitCode;
+  };
   const dryRun = args.includes('--dry-run');
   const includeSelf = args.includes('--include-self');
   const query = args.find((arg) => !arg.startsWith('--'));
   if (!query) {
-    process.stderr.write('Usage: ccd switch-all <name|email> [--dry-run] [--include-self]\n');
-    return 1;
+    err('Usage: ccd switch-all <name|email> [--dry-run] [--include-self]\n');
+    return finish(1);
   }
   const resolved = resolveAccount(query);
   if (resolved.error) {
-    process.stderr.write(`Account ${resolved.error}\n`);
-    return 1;
+    err(`Account ${resolved.error}\n`);
+    return finish(1);
   }
   const listed = listPanes();
   if (!listed) {
-    process.stderr.write('No pane launcher found (herdr or tmux required).\n');
-    return 1;
+    err('No pane launcher found (herdr or tmux required).\n');
+    return finish(1);
   }
   const processes = runningClaudeProcesses();
   const { plan, skippedSelf, skipped } = buildPlan(listed.launcher, listed.panes, processes, process.env.HERDR_PANE_ID || '', includeSelf);
   let skippedCount = skippedSelf.length + skipped.length;
   let switchedCount = 0;
   let failedCount = 0;
-  for (const item of skippedSelf) process.stdout.write(`skip self ${item.pane.id} ${item.sessionId}\n`);
-  for (const item of skipped) process.stdout.write(`skip pane ${item.pane.id}${item.pid ? ` pid ${item.pid}` : ''}: ${item.reason}\n`);
+  for (const item of skippedSelf) out(`skip self ${item.pane.id} ${item.sessionId}\n`);
+  for (const item of skipped) out(`skip pane ${item.pane.id}${item.pid ? ` pid ${item.pid}` : ''}: ${item.reason}\n`);
   for (const item of plan) {
-    process.stdout.write(`${dryRun ? 'dry-run ' : ''}pane ${item.pane.id} pid ${item.pid} resume ${item.sessionId} -> ${resolved.account.name}\n`);
+    out(`${dryRun ? 'dry-run ' : ''}pane ${item.pane.id} pid ${item.pid} resume ${item.sessionId} -> ${resolved.account.name}\n`);
     if (!dryRun) {
       const result = await switchPane(listed.launcher, item, resolved.account);
       if (result.ok) {
         switchedCount += 1;
       } else if (result.skipped) {
         skippedCount += 1;
-        process.stdout.write(`skip pane ${item.pane.id}: ${result.reason}\n`);
+        out(`skip pane ${item.pane.id}: ${result.reason}\n`);
       } else {
         failedCount += 1;
-        process.stdout.write(`failed pane ${item.pane.id}: ${result.reason}\n`);
+        out(`failed pane ${item.pane.id}: ${result.reason}\n`);
       }
     }
   }
-  process.stdout.write(`switched ${switchedCount} / failed ${failedCount} / skipped ${skippedCount}\n`);
-  return failedCount > 0 ? 1 : 0;
+  out(`switched ${switchedCount} / failed ${failedCount} / skipped ${skippedCount}\n`);
+  return finish(failedCount > 0 ? 1 : 0, { switchedCount, failedCount, skippedCount, plannedCount: plan.length });
 }
 
 export { parsePsOutput };

@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defaultDir, resolveAccount } from '../accounts.js';
 import { loadConfig, saveConfig } from '../config.js';
-import { runRateLimitHook } from '../hook.js';
+import { runRateLimitHook, runUsageHook } from '../hook.js';
 import { loadState } from '../state.js';
 import { readJson, writeJsonAtomic } from '../util.js';
 
@@ -21,6 +22,10 @@ function settingsPath(account) {
   return path.join(account.dir, 'settings.json');
 }
 
+function statuslineCommand() {
+  return fileURLToPath(new URL('../../shell/ccd-statusline.sh', import.meta.url));
+}
+
 function ensureHook(settings) {
   settings.hooks ||= {};
   const entries = Array.isArray(settings.hooks.StopFailure) ? settings.hooks.StopFailure : [];
@@ -37,6 +42,38 @@ function ensureHook(settings) {
   return settings;
 }
 
+function isUsageStatusLine(settings) {
+  return settings.statusLine?.type === 'command' && settings.statusLine?.command === statuslineCommand();
+}
+
+function ensureUsageStatusLine(settings) {
+  if (!settings.statusLine) {
+    settings.statusLine = { type: 'command', command: statuslineCommand() };
+    return { settings, changed: true, installed: true };
+  }
+  if (isUsageStatusLine(settings)) return { settings, changed: false, installed: true };
+  return { settings, changed: false, installed: false };
+}
+
+function removeUsageStatusLine(settings) {
+  if (isUsageStatusLine(settings)) {
+    delete settings.statusLine;
+    return { settings, changed: true };
+  }
+  return { settings, changed: false };
+}
+
+function usageSnippet(existingCommand = '<existing statusline command>') {
+  return [
+    '既存の statusline は上書きしません。既存の statusline に次の 3 行を足してください:',
+    '```sh',
+    'json=$(cat)',
+    'printf %s "$json" | ccd hook usage >/dev/null 2>&1 &',
+    `printf %s "$json" | ${existingCommand}`,
+    '```',
+  ].join('\n') + '\n';
+}
+
 function removeHook(settings) {
   const entries = Array.isArray(settings.hooks?.StopFailure) ? settings.hooks.StopFailure : [];
   for (const entry of entries) {
@@ -50,6 +87,12 @@ export async function run(args = []) {
   const action = args[0] || 'status';
   if (action === 'rate-limit') {
     await runRateLimitHook(readStdin());
+    return 0;
+  }
+  if (action === 'usage') {
+    const usedIndex = args.indexOf('--used');
+    const used = usedIndex >= 0 ? args[usedIndex + 1] : null;
+    await runUsageHook(usedIndex >= 0 ? '' : readStdin(), { used });
     return 0;
   }
 
@@ -80,11 +123,36 @@ export async function run(args = []) {
     return 0;
   }
 
+  if (action === 'install-usage') {
+    fs.mkdirSync(account.dir, { recursive: true, mode: 0o700 });
+    const result = ensureUsageStatusLine(readJson(file) || {});
+    if (!result.installed) {
+      process.stdout.write(usageSnippet(result.settings.statusLine?.command));
+      return 0;
+    }
+    if (result.changed) {
+      if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
+      writeJsonAtomic(file, result.settings);
+    }
+    process.stdout.write(`Installed usage statusline hook in ${file}\n`);
+    return 0;
+  }
+
   if (action === 'uninstall') {
     const settings = removeHook(readJson(file) || {});
     if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
     writeJsonAtomic(file, settings);
     process.stdout.write(`Uninstalled StopFailure hook from ${file}\n`);
+    return 0;
+  }
+
+  if (action === 'uninstall-usage') {
+    const result = removeUsageStatusLine(readJson(file) || {});
+    if (result.changed) {
+      if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.bak`);
+      writeJsonAtomic(file, result.settings);
+    }
+    process.stdout.write(`Uninstalled usage statusline hook from ${file}\n`);
     return 0;
   }
 
@@ -103,6 +171,6 @@ export async function run(args = []) {
     return 0;
   }
 
-  process.stderr.write('Usage: ccd hook install [--account <q>] [--mode auto|notify] | uninstall | status | rate-limit\n');
+  process.stderr.write('Usage: ccd hook install [--account <q>] [--mode auto|notify] | uninstall | install-usage | uninstall-usage | status | rate-limit | usage [--used <n>]\n');
   return 1;
 }

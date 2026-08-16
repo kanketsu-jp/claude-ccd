@@ -62,6 +62,7 @@ Requires Node.js >= 18.17, macOS or Linux, and an installed
 | `ccd switch-all <name\|email> [--dry-run] [--include-self]` | Move running herdr/tmux panes with `--resume <sid>` to another account |
 | `ccd doctor` | Diagnose setup problems |
 | `ccd hook install` | Install the rate-limit auto-switch hook |
+| `ccd hook install-usage` | Install the statusline usage failover hook |
 | `ccd config` | Read/write `~/.config/ccd/config.json` |
 
 Accounts can be addressed by **name** (`work`), by **path**, or by a
@@ -188,6 +189,23 @@ Only `rate_limit` triggers a switch. Other stop failures Claude Code reports —
 `overloaded`, `server_error` and the rest — are capacity or request problems
 that another account would hit just the same, so `ccd` leaves them alone.
 
+### Usage failover before the weekly cap
+
+Claude Code の週間クォータ使用率は statusline に渡る JSON でだけ読めます。
+`ccd hook install-usage` はその JSON を `ccd hook usage` に流し込み、既定では
+`rate_limits.seven_day.used_percentage` が 90% 以上になった時点で
+`switch-all` 相当の処理を走らせます。実際に 1 台以上のペインが別アカウントへ
+移った場合だけ、同じクォータ期間の再発火を止めます。
+
+```bash
+ccd hook install --mode auto
+ccd hook install-usage
+ccd config set autoSwitch.usageThreshold 90
+```
+
+既存の `statusLine` がある場合、`install-usage` は上書きしません。代わりに
+既存 statusline へ足す 3 行のスニペットを表示します。
+
 ### Safety limits
 
 Auto-switching a coding agent is the kind of automation that can loop forever if
@@ -202,10 +220,13 @@ you let it, so it is bounded by default:
 | `autoSwitch.maxSwitchesPerHour` | `4` | Global ceiling — the runaway stop |
 | `autoSwitch.resume` | `true` | Resume the same session on the new account |
 | `autoSwitch.launcher` | `auto` | `auto` \| `herdr` \| `tmux` \| `none` |
+| `autoSwitch.usageThreshold` | `90` | 週間使用率がこの % 以上で先回り切替。`0` or `null` で無効 |
+| `autoSwitch.usageWatch` | `null` | 監視対象アカウント名。`null` なら現在アカウントを常に対象 |
 
 ```bash
 ccd config set autoSwitch.mode auto
 ccd config set autoSwitch.cooldownMinutes 90
+ccd config set autoSwitch.usageWatch work
 ```
 
 ### Dynamic default account

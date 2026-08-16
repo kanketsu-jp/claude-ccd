@@ -26,6 +26,8 @@ export const defaultConfig = {
     continueMessage: 'continue',
     order: [],
     launcher: 'auto',
+    usageThreshold: 90,
+    usageWatch: null,
   },
 };
 

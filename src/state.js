@@ -7,6 +7,7 @@ const emptyState = {
   rateLimitedByEmail: {},
   switches: [],
   lastSwitchBySession: {},
+  lastUsageFailover: null,
 };
 
 export function getPath() {
@@ -22,6 +23,7 @@ export function loadState() {
     switches: Array.isArray(stored.switches) ? stored.switches : [],
     lastSwitchBySession: stored.lastSwitchBySession || {},
     lastEvent: stored.lastEvent || null,
+    lastUsageFailover: stored.lastUsageFailover || null,
   };
 }
 
@@ -55,6 +57,16 @@ export function recordSwitch(entry) {
   saveState(state);
 }
 
+export function recordUsageFailover(entry) {
+  const state = loadState();
+  state.lastUsageFailover = {
+    account: String(entry.account),
+    resetsAt: Number(entry.resetsAt || 0) || null,
+    at: entry.at || Date.now(),
+  };
+  saveState(state);
+}
+
 export function pruneState(state) {
   const now = Date.now();
   const out = {
@@ -64,6 +76,7 @@ export function pruneState(state) {
     lastSwitchBySession: { ...(state.lastSwitchBySession || {}) },
     lastEvent: state.lastEvent || null,
   };
+  if (state.lastUsageFailover) out.lastUsageFailover = state.lastUsageFailover;
   for (const [sessionId, at] of Object.entries(out.lastSwitchBySession)) {
     if (now - at > 24 * 60 * 60 * 1000) delete out.lastSwitchBySession[sessionId];
   }
