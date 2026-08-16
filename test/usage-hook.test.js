@@ -73,7 +73,7 @@ exit 0
   run(['config', 'set', 'autoSwitch.order', '["work","spare"]'], env);
   fs.writeFileSync(psOut, '');
 
-  const child = panes.length > 0 ? startReapedSleeper(root) : null;
+  const child = panes.length > 0 && paneMode !== 'empty' ? startReapedSleeper(root) : null;
   if (child) {
     if (paneMode === 'success') {
       writeProcessInfoSequence(processInfoDir, panes[0], [
@@ -87,6 +87,10 @@ exit 0
         { shell_pid: 201, foreground_processes: [] },
       ]);
     }
+  } else if (panes.length > 0 && paneMode === 'empty') {
+    writeProcessInfoSequence(processInfoDir, panes[0], [
+      { shell_pid: 201, foreground_processes: [] },
+    ]);
   }
 
   return { root, home, env, log, child };
@@ -240,6 +244,22 @@ test('usage failover failure does not record lastUsageFailover and leaves a retr
     assert.equal(state.lastUsageFailover, undefined);
     assert.equal(state.lastEvent.kind, 'failed');
     assert.match(logText(fixture.log), /herdr notification show Claude usage failover failed/);
+  } finally {
+    cleanup(fixture);
+  }
+});
+
+test('usage failover does not record when no panes were switched', () => {
+  const fixture = setup({ paneMode: 'empty' });
+  try {
+    const preferredBefore = readConfig(fixture.home).preferredAccount;
+    const out = fire(fixture.env, 92);
+    const state = readState(fixture.env);
+    assert.match(out, /failed/i);
+    assert.equal(state.lastUsageFailover, undefined);
+    assert.equal(readConfig(fixture.home).preferredAccount, preferredBefore);
+    assert.equal(state.lastEvent.kind, 'failed');
+    assert.match(state.lastEvent.message, /no panes were switched/);
   } finally {
     cleanup(fixture);
   }
