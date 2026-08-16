@@ -1,6 +1,30 @@
+import path from 'node:path';
 import { resolveAccount } from '../accounts.js';
-import { buildCommand, extractResumeSessionId, isClaudeProcess, parsePsOutput, runningClaudeProcesses } from '../launcher.js';
-import { commandExists, run as runCommand } from '../util.js';
+import { extractResumeSessionId, isClaudeProcess, parsePsOutput, runningClaudeProcesses } from '../launcher.js';
+import { commandExists, run as runCommand, shellQuote } from '../util.js';
+
+const DEFAULT_TERM_TIMEOUT_MS = 10000;
+const DEFAULT_KILL_TIMEOUT_MS = 2000;
+const DEFAULT_POLL_INTERVAL_MS = 200;
+const DEFAULT_START_DELAY_MS = 8000;
+
+function envMs(name, fallback) {
+  const value = Number(process.env[name] || 0);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function switchAllTiming(overrides = {}) {
+  return {
+    termTimeoutMs: Number(overrides.termTimeoutMs || 0) > 0 ? Number(overrides.termTimeoutMs) : envMs('CCD_SWITCH_ALL_TERM_TIMEOUT_MS', DEFAULT_TERM_TIMEOUT_MS),
+    killTimeoutMs: Number(overrides.killTimeoutMs || 0) > 0 ? Number(overrides.killTimeoutMs) : envMs('CCD_SWITCH_ALL_KILL_TIMEOUT_MS', DEFAULT_KILL_TIMEOUT_MS),
+    pollIntervalMs: Number(overrides.pollIntervalMs || 0) > 0 ? Number(overrides.pollIntervalMs) : envMs('CCD_SWITCH_ALL_POLL_INTERVAL_MS', DEFAULT_POLL_INTERVAL_MS),
+    startDelayMs: Number(overrides.startDelayMs || 0) > 0 ? Number(overrides.startDelayMs) : envMs('CCD_SWITCH_ALL_START_DELAY_MS', DEFAULT_START_DELAY_MS),
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function parseJsonPanes(stdout) {
   try {
@@ -116,8 +140,8 @@ function processForPane(pane, processes) {
     .find((entry) => isDescendant(entry.proc, pane.pid, byPid))?.proc || null;
 }
 
-function processForHerdrPane(pane, processes) {
-  const result = runCommand('herdr', ['pane', 'process-info', '--pane', pane.id]);
+function processForHerdrPane(pane, processes, run = runCommand) {
+  const result = run('herdr', ['pane', 'process-info', '--pane', pane.id]);
   if (result.status !== 0) return { proc: null, reason: 'process-info failed' };
   const info = parseProcessInfo(result.stdout);
   const foreground = herdrForegroundClaude(info);
@@ -161,14 +185,93 @@ function buildPlan(launcher, panes, processes, selfPaneId, includeSelf) {
   return { plan, skippedSelf: self, skipped };
 }
 
-function switchPane(launcher, item, account) {
-  const command = buildCommand(account, { resumeSessionId: item.sessionId });
-  process.kill(item.pid, 'SIGTERM');
-  if (launcher === 'herdr') return runCommand('herdr', ['pane', 'run', item.pane.id, command]);
-  return runCommand('tmux', ['send-keys', '-t', item.pane.id, command, 'Enter']);
+function pidExists(pid, kill = process.kill) {
+  try {
+    kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== 'ESRCH';
+  }
 }
 
-export function runSwitchAll(args = []) {
+async function waitUntilGone(pid, timeoutMs, pollIntervalMs, deps = {}) {
+  const exists = deps.exists || ((targetPid) => pidExists(targetPid, deps.kill || process.kill));
+  const sleepFn = deps.sleep || sleep;
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    if (!exists(pid)) return true;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await sleepFn(Math.min(pollIntervalMs, remaining));
+  }
+}
+
+export async function waitForProcessExit(pid, deps = {}) {
+  const kill = deps.kill || process.kill;
+  const timing = switchAllTiming(deps);
+  try {
+    kill(pid, 'SIGTERM');
+  } catch (error) {
+    if (error?.code === 'ESRCH') return true;
+  }
+  if (await waitUntilGone(pid, timing.termTimeoutMs, timing.pollIntervalMs, { ...deps, kill })) return true;
+
+  try {
+    kill(pid, 'SIGKILL');
+  } catch (error) {
+    if (error?.code === 'ESRCH') return true;
+  }
+  return waitUntilGone(pid, timing.killTimeoutMs, timing.pollIntervalMs, { ...deps, kill });
+}
+
+function ccdBinPath(argv1 = process.argv[1]) {
+  return path.resolve(argv1 || 'ccd');
+}
+
+export function buildSwitchCommand(account, sessionId, ccdBin = ccdBinPath()) {
+  return `CLAUDE_CONFIG_DIR=${shellQuote(account.dir)} ${shellQuote(ccdBin)} --resume ${shellQuote(sessionId)}`;
+}
+
+function sendStartCommand(launcher, pane, command, run = runCommand) {
+  if (launcher === 'herdr') return run('herdr', ['pane', 'run', pane.id, command]);
+  return run('tmux', ['send-keys', '-t', pane.id, command, 'Enter']);
+}
+
+function processNameIsClaude(proc) {
+  return path.basename(String(proc?.name || '')) === 'claude';
+}
+
+export function paneHasStartedClaude(launcher, pane, run = runCommand) {
+  if (launcher === 'herdr') {
+    const result = run('herdr', ['pane', 'process-info', '--pane', pane.id]);
+    if (result.status !== 0) return false;
+    const info = parseProcessInfo(result.stdout);
+    return (info?.foreground_processes || []).some((proc) => processNameIsClaude(proc));
+  }
+  const proc = processForPane(pane, runningClaudeProcesses());
+  return Boolean(proc && isClaudeProcess(proc));
+}
+
+export async function switchPane(launcher, item, account, deps = {}) {
+  const run = deps.runCommand || runCommand;
+  const sleepFn = deps.sleep || sleep;
+  const timing = switchAllTiming(deps);
+  const exited = await waitForProcessExit(item.pid, deps);
+  if (!exited) return { ok: false, skipped: true, reason: `process ${item.pid} did not exit` };
+
+  const command = buildSwitchCommand(account, item.sessionId, deps.ccdBin || ccdBinPath());
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const started = sendStartCommand(launcher, item.pane, command, run);
+    if (started.status !== 0) {
+      return { ok: false, failed: true, reason: started.stderr || started.stdout || `failed to switch pane ${item.pane.id}` };
+    }
+    await sleepFn(timing.startDelayMs);
+    if (paneHasStartedClaude(launcher, item.pane, run)) return { ok: true };
+  }
+  return { ok: false, failed: true, reason: `claude did not start (sid ${item.sessionId})` };
+}
+
+export async function runSwitchAll(args = []) {
   const dryRun = args.includes('--dry-run');
   const includeSelf = args.includes('--include-self');
   const query = args.find((arg) => !arg.startsWith('--'));
@@ -188,19 +291,28 @@ export function runSwitchAll(args = []) {
   }
   const processes = runningClaudeProcesses();
   const { plan, skippedSelf, skipped } = buildPlan(listed.launcher, listed.panes, processes, process.env.HERDR_PANE_ID || '', includeSelf);
+  let skippedCount = skippedSelf.length + skipped.length;
+  let switchedCount = 0;
+  let failedCount = 0;
   for (const item of skippedSelf) process.stdout.write(`skip self ${item.pane.id} ${item.sessionId}\n`);
   for (const item of skipped) process.stdout.write(`skip pane ${item.pane.id}${item.pid ? ` pid ${item.pid}` : ''}: ${item.reason}\n`);
   for (const item of plan) {
     process.stdout.write(`${dryRun ? 'dry-run ' : ''}pane ${item.pane.id} pid ${item.pid} resume ${item.sessionId} -> ${resolved.account.name}\n`);
     if (!dryRun) {
-      const result = switchPane(listed.launcher, item, resolved.account);
-      if (result.status !== 0) {
-        process.stderr.write(result.stderr || result.stdout || `Failed to switch pane ${item.pane.id}\n`);
-        return 1;
+      const result = await switchPane(listed.launcher, item, resolved.account);
+      if (result.ok) {
+        switchedCount += 1;
+      } else if (result.skipped) {
+        skippedCount += 1;
+        process.stdout.write(`skip pane ${item.pane.id}: ${result.reason}\n`);
+      } else {
+        failedCount += 1;
+        process.stdout.write(`failed pane ${item.pane.id}: ${result.reason}\n`);
       }
     }
   }
-  return 0;
+  process.stdout.write(`switched ${switchedCount} / failed ${failedCount} / skipped ${skippedCount}\n`);
+  return failedCount > 0 ? 1 : 0;
 }
 
 export { parsePsOutput };
