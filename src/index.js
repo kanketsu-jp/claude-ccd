@@ -17,6 +17,7 @@ import * as shellInitCmd from './commands/shellInit.js';
 import * as configCmd from './commands/configCmd.js';
 import * as defaultCmd from './commands/defaultCmd.js';
 import * as switchAllCmd from './commands/switchAll.js';
+import * as disableCmd from './commands/disableCmd.js';
 
 const commands = new Map([
   ['list', listCmd],
@@ -33,6 +34,8 @@ const commands = new Map([
   ['config', configCmd],
   ['default', defaultCmd],
   ['switch-all', switchAllCmd],
+  ['disable', disableCmd],
+  ['enable', { run: (args) => disableCmd.runEnable(args) }],
 ]);
 
 function help() {
@@ -57,6 +60,8 @@ Commands:
   current                  Print current account name
   default [account]        Show or set the default account
   switch-all <account>     Switch all herdr/tmux panes to an account
+  disable [account]        Exclude an account from automatic switching (list if no arg)
+  enable <account>         Re-include a disabled account
   doctor                   Check local setup
   <name> [args...]         Delegate to ccd-<name> on PATH if available
   help                     Show this help

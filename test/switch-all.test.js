@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { switchPane } from '../src/commands/switchAll.js';
+import { buildSwitchCommand, switchPane } from '../src/commands/switchAll.js';
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const cli = path.join(repoRoot, 'bin', 'ccd.js');
@@ -355,4 +355,21 @@ test('switch-all retries once when claude does not start and counts the failure'
   } finally {
     child.cleanup();
   }
+});
+
+// 既定アカウントへ戻すときは CLAUDE_CONFIG_DIR を「代入」せず「解除」する。
+// 代入すると Keychain のサービス名が変わって未ログイン扱いになり、さらに切替元シェルに
+// 残った CLAUDE_CONFIG_DIR を新プロセスが継承して元アカウントで起動してしまう
+// (2026-08-17 実測: 切替後もまた kimura で起動した)。launcher.js と同じ規約。
+test('buildSwitchCommand unsets CLAUDE_CONFIG_DIR when switching to the default account', () => {
+  const command = buildSwitchCommand({ isDefault: true, dir: '/home/u/.claude' }, 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa', '/bin/ccd');
+  assert.match(command, /^env -u CLAUDE_CONFIG_DIR /);
+  assert.doesNotMatch(command, /CLAUDE_CONFIG_DIR=/);
+  assert.match(command, /--resume 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa'/);
+});
+
+test('buildSwitchCommand assigns CLAUDE_CONFIG_DIR for non-default accounts', () => {
+  const command = buildSwitchCommand({ isDefault: false, dir: '/home/u/.claude-work' }, 'bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb', '/bin/ccd');
+  assert.match(command, /^CLAUDE_CONFIG_DIR='\/home\/u\/\.claude-work'/);
+  assert.doesNotMatch(command, /env -u/);
 });

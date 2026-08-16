@@ -7,6 +7,8 @@ export const defaultConfig = {
   claudeBin: null,
   launchArgs: [],
   preferredAccount: null,
+  // 自動選択から除外するアカウント名 (手動の use / run は可能)。`ccd disable <name>` で設定。
+  disabledAccounts: [],
   // 短縮フラグ -> 実引数の展開表。例: {"-y": ["--dangerously-skip-permissions"]}
   argAliases: {},
   extraDirs: [],

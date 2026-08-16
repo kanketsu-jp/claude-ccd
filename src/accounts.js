@@ -141,8 +141,20 @@ export function rateLimitedAtFor(account, state = {}, accounts = null) {
   return Math.max(...times);
 }
 
+// 無効化されたアカウントか (config.disabledAccounts に名前がある)。
+// 自動選択 (レートリミット時の切替先 / 使用率フェイルオーバー / 既定の候補) から外すためのもので、
+// 手動の `ccd use <name>` / `ccd run <name>` は従来どおり使える。
+// 由来: 2026-08-17 「使わないはずの kimura が 5 ペインで動いていた」。既定が一度書き換わると
+// その後もそのアカウントが選ばれ続けるため、明示的に候補から外せる必要があった。
+export function isDisabled(account, config = {}) {
+  const list = config.disabledAccounts;
+  if (!Array.isArray(list) || list.length === 0) return false;
+  return list.some((name) => String(name) === account?.name || String(name) === account?.email);
+}
+
 export function isHealthy(account, state = {}, config = {}, accounts = null) {
   if (!account?.loggedIn) return false;
+  if (isDisabled(account, config)) return false;
   const at = rateLimitedAtFor(account, state, accounts);
   if (!at) return true;
   const minutes = Number(config.autoSwitch?.cooldownMinutes || 0);

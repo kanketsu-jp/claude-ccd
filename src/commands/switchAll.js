@@ -7,6 +7,10 @@ const DEFAULT_TERM_TIMEOUT_MS = 10000;
 const DEFAULT_KILL_TIMEOUT_MS = 2000;
 const DEFAULT_POLL_INTERVAL_MS = 200;
 const DEFAULT_START_DELAY_MS = 8000;
+// 起動確認はポーリングで待つ。claude の起動は MCP の接続を含むため実測で 34〜68 秒かかった
+// （2026-08-17）。8 秒の一発判定では、起動していたものを failed と誤報する。
+const DEFAULT_START_TIMEOUT_MS = 120000;
+const DEFAULT_START_POLL_MS = 3000;
 
 function envMs(name, fallback) {
   const value = Number(process.env[name] || 0);
@@ -19,6 +23,8 @@ function switchAllTiming(overrides = {}) {
     killTimeoutMs: Number(overrides.killTimeoutMs || 0) > 0 ? Number(overrides.killTimeoutMs) : envMs('CCD_SWITCH_ALL_KILL_TIMEOUT_MS', DEFAULT_KILL_TIMEOUT_MS),
     pollIntervalMs: Number(overrides.pollIntervalMs || 0) > 0 ? Number(overrides.pollIntervalMs) : envMs('CCD_SWITCH_ALL_POLL_INTERVAL_MS', DEFAULT_POLL_INTERVAL_MS),
     startDelayMs: Number(overrides.startDelayMs || 0) > 0 ? Number(overrides.startDelayMs) : envMs('CCD_SWITCH_ALL_START_DELAY_MS', DEFAULT_START_DELAY_MS),
+    startTimeoutMs: Number(overrides.startTimeoutMs || 0) > 0 ? Number(overrides.startTimeoutMs) : envMs('CCD_SWITCH_ALL_START_TIMEOUT_MS', DEFAULT_START_TIMEOUT_MS),
+    startPollMs: Number(overrides.startPollMs || 0) > 0 ? Number(overrides.startPollMs) : envMs('CCD_SWITCH_ALL_START_POLL_MS', DEFAULT_START_POLL_MS),
   };
 }
 
@@ -229,7 +235,15 @@ function ccdBinPath(argv1 = process.argv[1]) {
 }
 
 export function buildSwitchCommand(account, sessionId, ccdBin = ccdBinPath()) {
-  return `CLAUDE_CONFIG_DIR=${shellQuote(account.dir)} ${shellQuote(ccdBin)} --resume ${shellQuote(sessionId)}`;
+  // 🚨 既定アカウントへ切り替えるときは CLAUDE_CONFIG_DIR を「代入」せず「解除」する。
+  // 代入すると Keychain のサービス名が `Claude Code-credentials-<hash>` になり、
+  // 未設定時の `Claude Code-credentials` と別項目を見に行って「未ログイン」になる。
+  // さらに、切替元のシェルに CLAUDE_CONFIG_DIR が残っていると新プロセスがそれを継承するため、
+  // 明示的な `env -u` が必要（2026-08-17 実測: unset しないと切替後もまた元アカウントで起動した）。
+  // launcher.js の buildLaunchCommand と同じ規約。
+  const quoted = `${shellQuote(ccdBin)} --resume ${shellQuote(sessionId)}`;
+  if (account.isDefault) return `env -u CLAUDE_CONFIG_DIR ${quoted}`;
+  return `CLAUDE_CONFIG_DIR=${shellQuote(account.dir)} ${quoted}`;
 }
 
 function sendStartCommand(launcher, pane, command, run = runCommand) {
@@ -265,8 +279,17 @@ export async function switchPane(launcher, item, account, deps = {}) {
     if (started.status !== 0) {
       return { ok: false, failed: true, reason: started.stderr || started.stdout || `failed to switch pane ${item.pane.id}` };
     }
-    await sleepFn(timing.startDelayMs);
-    if (paneHasStartedClaude(launcher, item.pane, run)) return { ok: true };
+    // 🚨 一度きりの待ちで判定してはならない。claude の起動は MCP の接続を含むため
+    //    実測で 34〜68 秒かかる（2026-08-17）。8 秒で判定していたとき、実際には
+    //    起動していた 3 件すべてを failed と誤報し、無駄な再投入まで走った。
+    //    起動を待つのはポーリングで行い、上限まで粘る。
+    const deadline = Date.now() + timing.startTimeoutMs;
+    let seen = false;
+    while (Date.now() < deadline) {
+      await sleepFn(Math.min(timing.startPollMs, Math.max(0, deadline - Date.now())));
+      if (paneHasStartedClaude(launcher, item.pane, run)) { seen = true; break; }
+    }
+    if (seen) return { ok: true };
   }
   return { ok: false, failed: true, reason: `claude did not start (sid ${item.sessionId})` };
 }
@@ -280,9 +303,19 @@ export async function runSwitchAll(args = [], options = {}) {
   };
   const dryRun = args.includes('--dry-run');
   const includeSelf = args.includes('--include-self');
-  const query = args.find((arg) => !arg.startsWith('--'));
+  // 一度に全ペインを切り替えるのは、失敗したときの被害が大きい（2026-08-15 に 34 ペインを
+  // 一括で落とした）。少数で挙動を確かめてから広げられるようにする。
+  const limitIdx = args.indexOf('--limit');
+  const limit = limitIdx >= 0 ? Number(args[limitIdx + 1]) : 0;
+  if (limitIdx >= 0 && (!Number.isInteger(limit) || limit < 1)) {
+    err('--limit takes a positive integer\n');
+    return finish(1);
+  }
+  // 🚨 limitIdx が -1 のとき limitIdx+1 は 0 になり、先頭の引数（アカウント名）を
+  //    除外してしまう。--limit が実際に指定されているときだけ、その次の引数を飛ばす。
+  const query = args.find((arg, i) => !arg.startsWith('--') && !(limitIdx >= 0 && i === limitIdx + 1));
   if (!query) {
-    err('Usage: ccd switch-all <name|email> [--dry-run] [--include-self]\n');
+    err('Usage: ccd switch-all <name|email> [--dry-run] [--include-self] [--limit N]\n');
     return finish(1);
   }
   const resolved = resolveAccount(query);
@@ -296,7 +329,11 @@ export async function runSwitchAll(args = [], options = {}) {
     return finish(1);
   }
   const processes = runningClaudeProcesses();
-  const { plan, skippedSelf, skipped } = buildPlan(listed.launcher, listed.panes, processes, process.env.HERDR_PANE_ID || '', includeSelf);
+  const { plan: fullPlan, skippedSelf, skipped } = buildPlan(listed.launcher, listed.panes, processes, process.env.HERDR_PANE_ID || '', includeSelf);
+  // --limit は「先頭から N 件だけ処理する」。残りは黙って消さず、件数を明示する
+  // （何件を見送ったかが出ないと、全部やったのか一部なのか報告から読めない）
+  const plan = limit > 0 ? fullPlan.slice(0, limit) : fullPlan;
+  const deferred = fullPlan.length - plan.length;
   let skippedCount = skippedSelf.length + skipped.length;
   let switchedCount = 0;
   let failedCount = 0;
@@ -317,8 +354,8 @@ export async function runSwitchAll(args = [], options = {}) {
       }
     }
   }
-  out(`switched ${switchedCount} / failed ${failedCount} / skipped ${skippedCount}\n`);
-  return finish(failedCount > 0 ? 1 : 0, { switchedCount, failedCount, skippedCount, plannedCount: plan.length });
+  out(`switched ${switchedCount} / failed ${failedCount} / skipped ${skippedCount}${deferred > 0 ? ` / deferred ${deferred} (--limit ${limit})` : ''}\n`);
+  return finish(failedCount > 0 ? 1 : 0, { switchedCount, failedCount, skippedCount, deferredCount: deferred, plannedCount: plan.length });
 }
 
 export { parsePsOutput };

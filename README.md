@@ -60,6 +60,8 @@ Requires Node.js >= 18.17, macOS or Linux, and an installed
 | `ccd sync <name\|email>` | Share skills/rules/agents/commands/statusline/projects + merge selected settings from the default account |
 | `ccd default [name\|email] [--auto] [--clear]` | Show, set, auto-pick, or clear the account used when `CLAUDE_CONFIG_DIR` is unset |
 | `ccd switch-all <name\|email> [--dry-run] [--include-self]` | Move running herdr/tmux panes with `--resume <sid>` to another account |
+| `ccd disable [name\|email]` | Exclude an account from automatic switching (list disabled ones with no arg) |
+| `ccd enable <name\|email>` | Re-include a disabled account |
 | `ccd doctor` | Diagnose setup problems |
 | `ccd hook install` | Install the rate-limit auto-switch hook |
 | `ccd hook install-usage` | Install the statusline usage failover hook |
@@ -205,6 +207,22 @@ ccd config set autoSwitch.usageThreshold 90
 
 既存の `statusLine` がある場合、`install-usage` は上書きしません。代わりに
 既存 statusline へ足す 3 行のスニペットを表示します。
+
+### Excluding an account
+
+自動選択に使ってほしくないアカウントは候補から外せます。
+
+```bash
+ccd disable kimura   # 自動選択から除外（手動の `ccd use kimura` は可能）
+ccd enable  kimura   # 戻す
+ccd disable          # 無効化中の一覧
+```
+
+除外は `isHealthy()` で判定するため、**レートリミット時の切替先・使用率フェイルオーバー・
+既定アカウントの候補のすべてに効きます**。手動の `ccd use` / `ccd run` は別経路なので影響しません。
+全アカウントを無効化すると自動切替の行き先が無くなるので、最後の 1 つは無効化できません。
+
+設定は `~/.config/ccd/config.json` の `disabledAccounts` に保存されます。
 
 ### Safety limits
 

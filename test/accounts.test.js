@@ -89,3 +89,21 @@ test('resolveAccount keeps ambiguous email substring results ambiguous', () => {
   assert.ok(resolved.matches.some((account) => account.name === 'ambiguous-a'));
   assert.ok(resolved.matches.some((account) => account.name === 'ambiguous-b'));
 });
+
+// `ccd disable` で無効化したアカウントは自動選択 (レートリミット時の切替先 /
+// 使用率フェイルオーバー / 既定候補) から外れる。手動の use / run は別経路なので影響しない。
+// 由来: 2026-08-17「使わないはずの kimura が 5 ペインで動いていた」。
+test('isHealthy returns false for accounts listed in disabledAccounts', () => {
+  const account = { name: 'kimura', loggedIn: true };
+  assert.equal(accounts.isHealthy(account, {}, {}), true);
+  assert.equal(accounts.isHealthy(account, {}, { disabledAccounts: ['kimura'] }), false);
+});
+
+test('chooseHealthyAccount skips disabled accounts', () => {
+  const list = [
+    { name: 'kimura', loggedIn: true },
+    { name: 'default', loggedIn: true },
+  ];
+  assert.equal(accounts.chooseHealthyAccount(list, {}, {})?.name, 'kimura');
+  assert.equal(accounts.chooseHealthyAccount(list, {}, { disabledAccounts: ['kimura'] })?.name, 'default');
+});
